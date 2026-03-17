@@ -111,7 +111,7 @@ check_prerequisites() {
   step "Preflight checks"
 
   local missing=0
-  for tool in gh xcrun curl unzip zip shasum; do
+  for tool in gh xcrun curl unzip zip; do
     if command -v "$tool" &>/dev/null; then
       success "'$tool' found at $(command -v "$tool")"
     else
@@ -133,8 +133,7 @@ check_prerequisites() {
   gh repo view "$HOSTING_REPO" --json name --jq '.name' &>/dev/null \
     || error "Cannot access '${HOSTING_REPO}'. Check the repo name and your permissions."
 
-  info "Swift toolchain in use: $(xcrun swift --version 2>&1 | head -1)"
-  success "All checks passed." 
+  success "All checks passed."
 }
 
 
@@ -227,24 +226,17 @@ package_frameworks() {
     local zip_path="${zips_dir}/${fw_name}.xcframework.zip"
 
     info "Zipping ${fw_name}.xcframework..."
-    # Zip from the parent dir so the archive root is exactly XYZ.xcframework/
-    (cd "$(dirname "$fw_path")" && zip -r -X --quiet "$zip_path" "${fw_name}.xcframework")
+    # Use ditto instead of zip. ditto produces byte-stable archives that
+    # GitHub's CDN does not recompress, so the local checksum matches exactly
+    # what SPM downloads. Plain zip archives get recompressed by GitHub,
+    # causing checksum mismatches.
+    ditto -c -k --sequesterRsrc --keepParent "$fw_path" "$zip_path"
 
-    info "Computing SPM checksum for ${fw_name}..."
+    info "Computing checksum for ${fw_name}..."
     local checksum
-    # Use xcrun to guarantee the Xcode-bundled swift (5.2+) is used, not any
-    # older toolchain on PATH (e.g. a swift-5.0-RELEASE toolchain).
-    # compute-checksum is a plain SHA-256; shasum is used as a fallback.
-    if xcrun swift package compute-checksum "$zip_path" > /dev/null 2>&1; then
-      checksum=$(xcrun swift package compute-checksum "$zip_path")
-    else
-      warn "xcrun swift package compute-checksum unavailable — falling back to shasum"
-      checksum=$(shasum -a 256 "$zip_path" | awk '{print $1}')
-    fi
-
+    checksum=$(xcrun swift package compute-checksum "$zip_path")
     save_checksum "$fw_name" "$checksum"
     PUBLISHED_FRAMEWORKS+=("$fw_name")
-
     success "${fw_name}  →  ${checksum}"
   done
 
@@ -282,7 +274,7 @@ create_github_release() {
     fi
   fi
 
-  # Build release notes
+  # Build release notes — checksums are already known from package_frameworks
   local fw_list=""
   for fw in "${PUBLISHED_FRAMEWORKS[@]}"; do
     fw_list+="- \`${fw}.xcframework\`"$'\n'
@@ -308,21 +300,24 @@ Add this repository as a Swift Package in Xcode or your \`Package.swift\`:
 https://github.com/${HOSTING_REPO}
 \`\`\`"
 
-  info "Creating release '${RELEASE_TAG}'..."
+  # Collect all zip paths — passed directly to gh release create so that
+  # asset uploads are atomic with release creation. If any zip is missing
+  # the command fails before the release is created, not after.
+  local zip_files=()
+  for fw_name in "${PUBLISHED_FRAMEWORKS[@]}"; do
+    local zip_path="${zips_dir}/${fw_name}.xcframework.zip"
+    if [[ ! -f "$zip_path" ]]; then
+      error "Expected zip not found: ${zip_path}\nCheck that ditto succeeded for ${fw_name}."
+    fi
+    zip_files+=("$zip_path")
+  done
+
+  info "Creating release '${RELEASE_TAG}' and uploading ${#zip_files[@]} assets..."
   gh release create "$RELEASE_TAG" \
     --repo "$HOSTING_REPO" \
     --title "$release_title" \
-    --notes "$notes"
-
-  # Upload each zip as a release asset
-  for fw_name in "${PUBLISHED_FRAMEWORKS[@]}"; do
-    local zip_path="${zips_dir}/${fw_name}.xcframework.zip"
-    local size
-    size=$(du -sh "$zip_path" | cut -f1)
-    info "Uploading ${fw_name}.xcframework.zip (${size})..."
-    gh release upload "$RELEASE_TAG" "$zip_path" --repo "$HOSTING_REPO"
-    success "Uploaded ${fw_name}.xcframework.zip"
-  done
+    --notes "$notes" \
+    "${zip_files[@]}"
 
   success "Release live at: https://github.com/${HOSTING_REPO}/releases/tag/${RELEASE_TAG}"
 }
@@ -331,6 +326,8 @@ https://github.com/${HOSTING_REPO}
 # ──────────────────────────────────────────────────────────────────────────────
 # STEP 5 — Generate Package.swift
 # ──────────────────────────────────────────────────────────────────────────────
+
+
 
 generate_package_swift() {
   step "Generating Package.swift"
@@ -396,6 +393,84 @@ generate_package_swift() {
 }
 
 
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# STEP 6 — Validate the generated Package.swift
+# ──────────────────────────────────────────────────────────────────────────────
+
+validate_package_swift() {
+  step "Validating Package.swift"
+
+  local package_swift="$(pwd)/Package.swift"
+
+  [[ -f "$package_swift" ]] || error "Package.swift not found at ${package_swift}"
+
+  # ── Check 1: parse the manifest ──────────────────────────────────────────────
+  # dump-package parses Package.swift and prints it as JSON.
+  # Fails immediately on any syntax or structural error.
+  info "Checking manifest syntax (swift package dump-package)..."
+  if ! xcrun swift package dump-package > /dev/null 2>&1; then
+    error "Package.swift failed to parse:\n$(xcrun swift package dump-package 2>&1)"
+  fi
+  success "Manifest syntax OK."
+
+  # ── Check 2: resolve the package graph ───────────────────────────────────────
+  # describe resolves the full dependency graph and validates all binaryTarget
+  # URLs are reachable and their checksums match.
+  info "Resolving package graph (swift package describe)..."
+  local describe_output
+  if ! describe_output=$(xcrun swift package describe 2>&1); then
+    error "Package.swift failed to resolve:\n${describe_output}"
+  fi
+  success "Package graph resolved OK."
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# STEP 7 — Commit & push Package.swift to the hosting repo
+# ──────────────────────────────────────────────────────────────────────────────
+
+commit_package_swift() {
+  step "Committing Package.swift to ${HOSTING_REPO}"
+
+  local package_swift="$(pwd)/Package.swift"
+
+  # Verify we are inside a git repo (i.e. the script is run from the repo root)
+  if ! git -C "$(pwd)" rev-parse --git-dir &>/dev/null; then
+    warn "Current directory is not a git repository."
+    warn "Package.swift was written to: ${package_swift}"
+    warn "Please commit and push it manually."
+    return
+  fi
+
+  # Confirm this working tree belongs to the hosting repo
+  local remote_url
+  remote_url=$(git -C "$(pwd)" remote get-url origin 2>/dev/null || true)
+  if [[ "$remote_url" != *"${HOSTING_REPO}"* ]]; then
+    warn "The git remote origin (${remote_url}) does not match ${HOSTING_REPO}."
+    warn "Package.swift was written to: ${package_swift}"
+    warn "Please commit and push it manually."
+    return
+  fi
+
+  info "Staging Package.swift..."
+  git -C "$(pwd)" add Package.swift
+
+  # Nothing to commit if Package.swift is unchanged
+  if git -C "$(pwd)" diff --cached --quiet; then
+    info "Package.swift is unchanged — nothing to commit."
+    return
+  fi
+
+  info "Committing..."
+  git -C "$(pwd)" commit -m "Add Package.swift for RxSwift ${RXSWIFT_VERSION} binaries"
+
+  info "Pushing to origin..."
+  git -C "$(pwd)" push origin HEAD
+
+  success "Package.swift committed and pushed to ${HOSTING_REPO}."
+}
+
 # ──────────────────────────────────────────────────────────────────────────────
 # SUMMARY
 # ──────────────────────────────────────────────────────────────────────────────
@@ -416,10 +491,9 @@ print_summary() {
   done
   echo ""
   echo -e "  ${CYAN}Next steps:${NC}"
-  echo -e "  1. Copy ${YELLOW}Package.swift${NC} to the root of your hosting repo."
-  echo -e "  2. Commit and push it, then tag the commit ${YELLOW}${RELEASE_TAG}${NC}:"
-  echo -e "     ${YELLOW}git tag ${RELEASE_TAG} && git push origin ${RELEASE_TAG}${NC}"
-  echo -e "  3. Consumers add your package in Xcode using:"
+  echo -e "  1. Package.swift has been committed and pushed automatically."
+  echo -e "     (If that step was skipped, copy it to the repo root and push manually.)"
+  echo -e "  2. Consumers add your package in Xcode using:"
   echo -e "     ${YELLOW}https://github.com/${HOSTING_REPO}${NC}"
   echo ""
 }
@@ -444,6 +518,8 @@ main() {
   package_frameworks
   create_github_release
   generate_package_swift
+  validate_package_swift
+  commit_package_swift
   print_summary
 }
 
