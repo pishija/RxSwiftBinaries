@@ -23,27 +23,27 @@ let package = Package(
         .binaryTarget(
             name: "RxSwift",
             url: "https://github.com/pishija/RxSwiftBinaries/releases/download/rxswift-6.10.0/RxSwift.xcframework.zip",
-            checksum: "59ef50c3aeb1e049ab5f15e0853465a98c5bf468d834829c165948cd15bf95fa"
+            checksum: "fa707d4f8416fc680e618012f309f5cfc317a1083038c737744edcd1e4367ae3"
         ),
         .binaryTarget(
             name: "RxCocoa",
             url: "https://github.com/pishija/RxSwiftBinaries/releases/download/rxswift-6.10.0/RxCocoa.xcframework.zip",
-            checksum: "5eef318310873e92d5070464c0ea02d46c19da0f19e0350feca6653ef17c0299"
+            checksum: "d2687e9835664c288cf5b1c85cfd0574c4b7f6b2127ef649fae953916546f6b4"
         ),
         .binaryTarget(
             name: "RxRelay",
             url: "https://github.com/pishija/RxSwiftBinaries/releases/download/rxswift-6.10.0/RxRelay.xcframework.zip",
-            checksum: "9b31bc02622820705c6afc6cdee25c52719a81a908d1f15982e548a16b81d62b"
+            checksum: "e755ec925b8e796dedc5ab42887febae259d0869e9876f7e0552ec39b14d15ca"
         ),
         .binaryTarget(
             name: "RxTest",
             url: "https://github.com/pishija/RxSwiftBinaries/releases/download/rxswift-6.10.0/RxTest.xcframework.zip",
-            checksum: "58f63a6a4dbb27fe4eae3212b1ba0fbf060a52dbe99938114fa700f7e771a3bf"
+            checksum: "6a0cd79ed44477a9473c3bffa3d439bd67605e418ca4ee01ed08fa204d18f268"
         ),
         .binaryTarget(
             name: "RxBlocking",
             url: "https://github.com/pishija/RxSwiftBinaries/releases/download/rxswift-6.10.0/RxBlocking.xcframework.zip",
-            checksum: "1892592b216a1e101ba42ee212215c8f5a18fb12e586eff7e7c5eda7ed5c712d"
+            checksum: "f16c9b0a2d175a1b5657108502d50d6dd55fb29c952c31724401e53288088d4d"
         )
     ]
 )
