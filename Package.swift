@@ -28,12 +28,12 @@ let package = Package(
         .binaryTarget(
             name: "RxCocoa",
             url: "https://github.com/pishija/RxSwiftBinaries/releases/download/rxswift-6.10.0/RxCocoa.xcframework.zip",
-            checksum: "a5c86eb8e2b80f8b3302da461a02e51b7eefa23880a0055adea694bf82a1231e"
+            checksum: "5eef318310873e92d5070464c0ea02d46c19da0f19e0350feca6653ef17c0299"
         ),
         .binaryTarget(
             name: "RxRelay",
             url: "https://github.com/pishija/RxSwiftBinaries/releases/download/rxswift-6.10.0/RxRelay.xcframework.zip",
-            checksum: "e4b0a2221c4c19988da8128b327c7c372bd64696169a825f80dc727fe204bcca"
+            checksum: "9b31bc02622820705c6afc6cdee25c52719a81a908d1f15982e548a16b81d62b"
         ),
         .binaryTarget(
             name: "RxTest",
